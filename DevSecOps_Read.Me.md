@@ -21,7 +21,7 @@ I enjoy learning by building real-world projects, breaking things, fixing them, 
 
 ## 🧰 Tools & Technologies
 
-- Linux (Ubuntu)
+- Linux (Ubuntu/CentOS)
 - AWS (EC2, S3, IAM, VPC)
 - Git & GitHub
 - Bash Scripting
