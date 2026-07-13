@@ -51,6 +51,3 @@ jobs:
         script: |
           cd ~/deploy/backend
           pm2 restart ecosystem.config.js
-# if you don't have pm2 installed, you can install it with the following command:
-# npm install pm2 -g
-          
