@@ -22,25 +22,46 @@ jobs:
     - name: Prepare frontend
       run: echo "Static frontend — no build needed"
 
+    # -----------------------------
+    # BACKUP CURRENT BACKEND (Rollback Safety)
+    # -----------------------------
+    - name: Backup current backend on EC2
+      uses: appleboy/ssh-action@v0.1.7
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ubuntu
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          mkdir -p ~/rollback
+          cp -r ~/backend ~/rollback/backend_$(date +%s)
 
-    - name: Copy files to EC2
+    # -----------------------------
+    # COPY NEW BACKEND
+    # -----------------------------
+    - name: Copy backend to EC2
       uses: appleboy/scp-action@v0.1.7
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ubuntu
         key: ${{ secrets.EC2_SSH_KEY }}
-        source: "./backend/*"
+        source: "./backend/**"
         target: "~/backend"
 
+    # -----------------------------
+    # COPY FRONTEND
+    # -----------------------------
     - name: Copy frontend to EC2
       uses: appleboy/scp-action@v0.1.7
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ubuntu
         key: ${{ secrets.EC2_SSH_KEY }}
-        source: "frontend/*"
+        source: "frontend/**"
         target: "/var/www/html/"
 
+    # -----------------------------
+    # RESTART PM2
+    # -----------------------------
     - name: Restart PM2
       uses: appleboy/ssh-action@v0.1.7
       with:
@@ -50,3 +71,62 @@ jobs:
         script: |
           cd ~/backend
           pm2 restart ecosystem.config.js
+
+    # -----------------------------
+    # HEALTH CHECK
+    # -----------------------------
+    - name: Health Check
+      id: health
+      uses: appleboy/ssh-action@v0.1.7
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ubuntu
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          sleep 5
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check failed — rolling back"
+            cp -r ~/rollback/backend_* ~/backend
+            pm2 restart ecosystem.config.js
+            exit 1
+          fi
+          echo "Health check passed"
+
+    # -----------------------------
+    # SEND SES EMAIL ON SUCCESS
+    # -----------------------------
+    - name: Send SES Success Email
+      if: success()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: email-smtp.${{ secrets.SES_REGION }}.amazonaws.com
+        server_port: 587
+        username: ${{ secrets.SES_SMTP_USERNAME }}
+        password: ${{ secrets.SES_SMTP_PASSWORD }}
+        subject: "Deployment Successful"
+        to: ${{ secrets.SES_TO_EMAIL }}
+        from: ${{ secrets.SES_FROM_EMAIL }}
+        body: |
+          Deployment to EC2 was successful.
+          Health check passed.
+          PM2 restarted correctly.
+
+    # -----------------------------
+    # SEND SES EMAIL ON FAILURE
+    # -----------------------------
+    - name: Send SES Failure Email
+      if: failure()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: email-smtp.${{ secrets.SES_REGION }}.amazonaws.com
+        server_port: 587
+        username: ${{ secrets.SES_SMTP_USERNAME }}
+        password: ${{ secrets.SES_SMTP_PASSWORD }}
+        subject: "Deployment Failed — Rollback Triggered"
+        to: ${{ secrets.SES_TO_EMAIL }}
+        from: ${{ secrets.SES_FROM_EMAIL }}
+        body: |
+          Deployment failed.
+          Rollback was triggered automatically.
+          Check EC2 logs and PM2 status.
