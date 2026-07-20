@@ -24,11 +24,3 @@ This project is provided without an explicit license. Add a `LICENSE` file to de
 
 13/07/2026  CI/CD test and Github.
 
-trigger
-trigger
-trigger
-trigger
-trigger
-trigger
-trigger
-trigger
