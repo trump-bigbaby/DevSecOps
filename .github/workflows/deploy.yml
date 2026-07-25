@@ -11,19 +11,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -----------------------------
+      # CHECKOUT CODE
+      # -----------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # -----------------------------
+      # INSTALL NODE FOR BACKEND
+      # -----------------------------
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-
-      - name: Build frontend
-        working-directory: ./frontend
-        run: |
-          npm install
-          npm run build
 
       # -----------------------------
       # BACKUP CURRENT BACKEND (Rollback Safety)
@@ -51,7 +51,7 @@ jobs:
           target: "~/backend"
 
       # -----------------------------
-      # COPY FRONTEND
+      # COPY STATIC FRONTEND
       # -----------------------------
       - name: Copy frontend to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -59,7 +59,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "./frontend/dist/**"
+          source: "./frontend/**"
           target: "/var/www/html/"
 
       # -----------------------------
@@ -76,7 +76,7 @@ jobs:
             pm2 restart ecosystem.config.js
 
       # -----------------------------
-      # HEALTH CHECK
+      # HEALTH CHECK + ROLLBACK
       # -----------------------------
       - name: Health Check
         id: health
