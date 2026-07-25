@@ -4,44 +4,67 @@ on:
   push:
     branches:
       - main
+      - DevSecOps_Branch
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # -----------------------------
+      # CHECKOUT CODE
+      # -----------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # -----------------------------
+      # INSTALL NODE FOR BACKEND
+      # -----------------------------
       - name: Install Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Build frontend
-        working-directory: ./frontend
-        run: |
-          npm install
-          npm run build
+      # -----------------------------
+      # BACKUP CURRENT BACKEND (Rollback Safety)
+      # -----------------------------
+      - name: Backup current backend on EC2
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p ~/rollback
+            cp -r ~/backend ~/rollback/backend_$(date +%s)
 
+      # -----------------------------
+      # COPY NEW BACKEND
+      # -----------------------------
       - name: Copy backend to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "./backend/"
-          target: "~/deploy/backend"
+          source: "./backend/**"
+          target: "~/backend"
 
-      - name: Copy frontend build to EC2
+      # -----------------------------
+      # COPY STATIC FRONTEND
+      # -----------------------------
+      - name: Copy frontend to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "./frontend/dist/"
-          target: "/var/www/frontend"
+          source: "./frontend/**"
+          target: "/var/www/html/"
 
+      # -----------------------------
+      # RESTART PM2
+      # -----------------------------
       - name: Restart PM2
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -49,6 +72,28 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd ~/deploy/backend
+            cd ~/backend
             pm2 restart ecosystem.config.js
+
+      # -----------------------------
+      # HEALTH CHECK + ROLLBACK
+      # -----------------------------
+      - name: Health Check
+        id: health
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            sleep 5
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health)
+            if [ "$STATUS" != "200" ]; then
+              echo "Health check failed — rolling back"
+              LATEST=$(ls -td ~/rollback/backend_* | head -1)
+              cp -r "$LATEST"/* ~/backend
+              pm2 restart ecosystem.config.js
+              exit 1
+            fi
+            echo "Health check passed"
 
