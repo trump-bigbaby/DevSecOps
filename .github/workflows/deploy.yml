@@ -1,99 +1,94 @@
-name: Deploy to EC2
+name: GitOps Multi-Environment Deployment
 
 on:
   push:
     branches:
       - main
-      - DevSecOps_Branch
+
+  pull_request:
+    types: [closed]
+
+  release:
+    types: [published]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    # Select environment based on trigger
+    environment: >
+      ${{
+        github.event_name == 'push' && 'dev' ||
+        (github.event_name == 'pull_request' && github.event.pull_request.merged == true && 'staging') ||
+        (github.event_name == 'release' && 'production')
+      }}
+
     steps:
-      # -----------------------------
-      # CHECKOUT CODE
-      # -----------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # -----------------------------
-      # INSTALL NODE FOR BACKEND
-      # -----------------------------
-      - name: Install Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+      - name: Set environment variables based on environment
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "EC2_HOST=${{ secrets.EC2_HOST_DEV }}" >> $GITHUB_ENV
+            echo "EC2_SSH_KEY='${{ secrets.EC2_SSH_KEY_DEV }}'" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            echo "EC2_HOST=${{ secrets.EC2_HOST_STAGING }}" >> $GITHUB_ENV
+            echo "EC2_SSH_KEY='${{ secrets.EC2_SSH_KEY_STAGING }}'" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            echo "EC2_HOST=${{ secrets.EC2_HOST_PROD }}" >> $GITHUB_ENV
+            echo "EC2_SSH_KEY='${{ secrets.EC2_SSH_KEY_PROD }}'" >> $GITHUB_ENV
+          fi
 
-      # -----------------------------
-      # BACKUP CURRENT BACKEND (Rollback Safety)
-      # -----------------------------
+      - name: Install SSH key
+        run: |
+          echo "$EC2_SSH_KEY" > key.pem
+          chmod 600 key.pem
+
       - name: Backup current backend on EC2
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            mkdir -p ~/rollback
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "
+            mkdir -p ~/rollback &&
             cp -r ~/backend ~/rollback/backend_$(date +%s)
+          "
 
-      # -----------------------------
-      # COPY NEW BACKEND
-      # -----------------------------
-      - name: Copy backend to EC2
+      - name: Deploy backend
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ env.EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ env.EC2_SSH_KEY }}
           source: "./backend/**"
           target: "~/backend"
 
-      # -----------------------------
-      # COPY STATIC FRONTEND
-      # -----------------------------
-      - name: Copy frontend to EC2
+      - name: Deploy frontend
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ env.EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ env.EC2_SSH_KEY }}
           source: "./frontend/**"
           target: "/var/www/html/"
 
-      # -----------------------------
-      # RESTART PM2
-      # -----------------------------
       - name: Restart PM2
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cd ~/backend
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "
             pm2 restart ecosystem.config.js
+          "
 
-      # -----------------------------
-      # HEALTH CHECK + ROLLBACK
-      # -----------------------------
       - name: Health Check
-        id: health
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            sleep 5
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/health)
-            if [ "$STATUS" != "200" ]; then
-              echo "Health check failed — rolling back"
-              LATEST=$(ls -td ~/rollback/backend_* | head -1)
-              cp -r "$LATEST"/* ~/backend
-              pm2 restart ecosystem.config.js
-              exit 1
-            fi
-            echo "Health check passed"
+        run: |
+          STATUS=$(ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health")
 
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check failed. Rolling back..."
+            ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "
+              LATEST=\$(ls -td ~/rollback/backend_* | head -1)
+              cp -r \$LATEST/* ~/backend
+              pm2 restart ecosystem.config.js
+            "
+            exit 1
+          fi
+
+      - name: Deployment Successful
+        run: echo "Deployment completed successfully."
