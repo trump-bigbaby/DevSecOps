@@ -38,7 +38,7 @@ jobs:
 
       - name: Install SSH key
         run: |
-          echo "${{ secrets.EC2_SSH_KEY_DEV }}" > key.pem
+          echo "${{ secrets.EC2_SSH_KEY_PROD }}" > key.pem
           chmod 600 key.pem
 
       - name: Backup current backend on EC2
@@ -53,7 +53,7 @@ jobs:
         with:
           host: ${{ env.EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY_DEV }}
+          key: ${{ secrets.EC2_SSH_KEY_PROD }}
           source: "./backend/**"
           target: "~/backend"
 
