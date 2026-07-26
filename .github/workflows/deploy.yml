@@ -15,7 +15,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    # Select environment based on trigger
     environment: >
       ${{
         github.event_name == 'push' && 'dev' ||
@@ -27,22 +26,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set environment variables based on environment
+      - name: Select environment host
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "EC2_HOST=${{ secrets.EC2_HOST_DEV }}" >> $GITHUB_ENV
-            echo "EC2_SSH_KEY='${{ secrets.EC2_SSH_KEY_DEV }}'" >> $GITHUB_ENV
           elif [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
             echo "EC2_HOST=${{ secrets.EC2_HOST_STAGING }}" >> $GITHUB_ENV
-            echo "EC2_SSH_KEY='${{ secrets.EC2_SSH_KEY_STAGING }}'" >> $GITHUB_ENV
           elif [ "${{ github.event_name }}" = "release" ]; then
             echo "EC2_HOST=${{ secrets.EC2_HOST_PROD }}" >> $GITHUB_ENV
-            echo "EC2_SSH_KEY='${{ secrets.EC2_SSH_KEY_PROD }}'" >> $GITHUB_ENV
           fi
 
       - name: Install SSH key
         run: |
-          echo "$EC2_SSH_KEY" > key.pem
+          echo "${{ secrets.EC2_SSH_KEY_DEV }}" > key.pem
           chmod 600 key.pem
 
       - name: Backup current backend on EC2
@@ -57,7 +53,7 @@ jobs:
         with:
           host: ${{ env.EC2_HOST }}
           username: ubuntu
-          key: ${{ env.EC2_SSH_KEY }}
+          key: ${{ secrets.EC2_SSH_KEY_DEV }}
           source: "./backend/**"
           target: "~/backend"
 
@@ -66,7 +62,7 @@ jobs:
         with:
           host: ${{ env.EC2_HOST }}
           username: ubuntu
-          key: ${{ env.EC2_SSH_KEY }}
+          key: ${{ secrets.EC2_SSH_KEY_DEV }}
           source: "./frontend/**"
           target: "/var/www/html/"
 
