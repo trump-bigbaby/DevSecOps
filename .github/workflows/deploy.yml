@@ -34,7 +34,7 @@ jobs:
           aws ssm send-command \
             --instance-ids "$EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --parameters commands=["echo 'SSM is working'"] \
+            --parameters '{"commands":["echo SSM is working"]}' \
             --output text
 
       - name: Deploy via SSM
@@ -42,5 +42,5 @@ jobs:
           aws ssm send-command \
             --instance-ids "$EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --parameters commands=["bash ~/deploy/deploy.sh"] \
+            --parameters '{"commands":["bash ~/deploy/deploy.sh"]}' \
             --output text
