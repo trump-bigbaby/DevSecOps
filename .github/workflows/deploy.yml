@@ -2,91 +2,45 @@ name: GitOps Multi-Environment Deployment
 
 on:
   push:
-    branches:
-      - main
-
+    branches: [ main ]
   pull_request:
-    types: [closed]
-
+    types: [ closed ]
   release:
-    types: [published]
+    types: [ published ]
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    environment: >
-      ${{
-        github.event_name == 'push' && 'dev' ||
-        (github.event_name == 'pull_request' && github.event.pull_request.merged == true && 'staging') ||
-        (github.event_name == 'release' && 'production')
-      }}
+    env:
+      AWS_REGION: us-east-1
+      EC2_INSTANCE_ID: i-07eac60aeb237b118
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Select environment host
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "EC2_HOST=${{ secrets.EC2_HOST_DEV }}" >> $GITHUB_ENV
-          elif [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
-            echo "EC2_HOST=${{ secrets.EC2_HOST_STAGING }}" >> $GITHUB_ENV
-          elif [ "${{ github.event_name }}" = "release" ]; then
-            echo "EC2_HOST=${{ secrets.EC2_HOST_PROD }}" >> $GITHUB_ENV
-          fi
-
-      - name: Install SSH key
-        run: |
-          printf "%s" "${{ secrets.EC2_SSH_KEY_PROD }}" > key.pem
-          chmod 600 key.pem
-
-      - name: Backup current backend on EC2
-        run: |
-          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "
-            mkdir -p ~/rollback &&
-            cp -r ~/backend ~/rollback/backend_$(date +%s)
-          "
-
-      - name: Deploy backend
-        uses: appleboy/scp-action@v0.1.7
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ env.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY_PROD }}
-          source: "./backend/**"
-          target: "~/backend"
+          role-to-assume: arn:aws:iam::962606119198:role/GitHubActionsSSMRole
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy frontend
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ env.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY_PROD }}
-          source: "./frontend/**"
-          target: "/var/www/html/"
-
-      - name: Restart PM2
+      - name: Test SSM connection
         run: |
-          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "
-            cd ~/backend &&
-            pm2 restart ecosystem.config.js
-          "
+          aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands=["echo 'SSM is working'"] \
+            --output text
 
-      - name: Health Check
+      - name: Deploy via SSM
         run: |
-          STATUS=$(ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health")
-
-          if [ "$STATUS" != "200" ]; then
-            echo "Health check failed. Rolling back..."
-            ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@$EC2_HOST "
-              LATEST=\$(ls -td ~/rollback/backend_* | head -1)
-              cp -r \$LATEST/* ~/backend
-              cd ~/backend &&
-              pm2 restart ecosystem.config.js
-            "
-            exit 1
-          fi
-
-      - name: Deployment Successful
-        run: echo "Deployment completed successfully."
+          aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters commands=["bash ~/deploy/deploy.sh"] \
+            --output text
